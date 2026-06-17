@@ -1,9 +1,38 @@
+import { Readable } from 'stream';
 import { ProviderClient } from '../provider-client';
 import { buildCustomEndpoint } from '../provider-endpoints';
 import type { ProviderModelRegistryService } from '../../../model-discovery/provider-model-registry.service';
 
+const mockUndiciRequest = jest.fn();
+
+jest.mock('undici', () => ({
+  Agent: jest.fn().mockImplementation(() => ({})),
+  request: (...args: unknown[]) => mockUndiciRequest(...args),
+}));
+
 const mockFetch = jest.fn();
 (globalThis as unknown as { fetch: typeof fetch }).fetch = mockFetch;
+
+function mockUndiciSuccess(body = '{}') {
+  mockUndiciRequest.mockResolvedValue({
+    statusCode: 200,
+    headers: { 'content-type': 'application/json' },
+    body: Readable.from([body]),
+  });
+}
+
+function getUndiciRequest() {
+  const [url, options] = mockUndiciRequest.mock.calls[0] as [
+    string,
+    { headers: Record<string, string>; body: string },
+  ];
+
+  return {
+    url,
+    headers: options.headers,
+    body: JSON.parse(options.body),
+  };
+}
 
 describe('ProviderClient', () => {
   let client: ProviderClient;
@@ -11,6 +40,7 @@ describe('ProviderClient', () => {
   beforeEach(() => {
     client = new ProviderClient();
     mockFetch.mockReset();
+    mockUndiciRequest.mockReset();
   });
 
   const body = {
@@ -337,7 +367,7 @@ describe('ProviderClient', () => {
     });
 
     it('adds default instructions for subscription Responses requests', async () => {
-      mockFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+      mockUndiciSuccess();
 
       await client.forward({
         provider: 'openai',
@@ -350,9 +380,8 @@ describe('ProviderClient', () => {
         apiMode: 'responses',
       });
 
-      const url = mockFetch.mock.calls[0][0] as string;
+      const { url, body: sentBody } = getUndiciRequest();
       expect(url).toBe('https://chatgpt.com/backend-api/codex/responses');
-      const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       expect(sentBody.instructions).toBe('You are a helpful assistant.');
       expect(sentBody.input).toEqual([
         { role: 'user', content: [{ type: 'input_text', text: 'Hello' }] },
@@ -534,7 +563,7 @@ describe('ProviderClient', () => {
     });
 
     it('strips Codex-unsupported params on the subscription Responses path', async () => {
-      mockFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+      mockUndiciSuccess();
 
       await client.forward({
         provider: 'openai',
@@ -557,7 +586,7 @@ describe('ProviderClient', () => {
         apiMode: 'responses',
       });
 
-      const sent = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const { body: sent } = getUndiciRequest();
       expect(sent).not.toHaveProperty('temperature');
       expect(sent).not.toHaveProperty('top_p');
       expect(sent).not.toHaveProperty('max_output_tokens');
@@ -868,7 +897,7 @@ describe('ProviderClient', () => {
 
   describe('ChatGPT subscription provider', () => {
     it('routes to chatgpt.com Codex backend with subscription authType', async () => {
-      mockFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+      mockUndiciSuccess();
 
       const result = await client.forward({
         provider: 'openai',
@@ -879,19 +908,18 @@ describe('ProviderClient', () => {
         authType: 'subscription',
       });
 
-      const url = mockFetch.mock.calls[0][0] as string;
+      const { url, headers } = getUndiciRequest();
       expect(url).toBe('https://chatgpt.com/backend-api/codex/responses');
       expect(result.isChatGpt).toBe(true);
       expect(result.isGoogle).toBe(false);
       expect(result.isAnthropic).toBe(false);
 
-      const headers = mockFetch.mock.calls[0][1].headers;
       expect(headers['originator']).toBe('codex_cli_rs');
       expect(headers['Authorization']).toBe('Bearer oauth-token');
     });
 
     it('converts request body using toResponsesRequest', async () => {
-      mockFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+      mockUndiciSuccess();
 
       const bodyWithSystem = {
         messages: [
@@ -908,7 +936,7 @@ describe('ProviderClient', () => {
         authType: 'subscription',
       });
 
-      const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const { body: sentBody } = getUndiciRequest();
       expect(sentBody.instructions).toBe('Be helpful.');
       expect(sentBody.input).toEqual([
         { role: 'user', content: [{ type: 'input_text', text: 'Hello' }] },
@@ -919,7 +947,7 @@ describe('ProviderClient', () => {
     });
 
     it('sends default instructions when no system or developer prompt is present', async () => {
-      mockFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+      mockUndiciSuccess();
 
       await client.forward({
         provider: 'openai',
@@ -930,7 +958,7 @@ describe('ProviderClient', () => {
         authType: 'subscription',
       });
 
-      const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const { body: sentBody } = getUndiciRequest();
       expect(sentBody.instructions).toBe('You are a helpful assistant.');
     });
 
@@ -1122,7 +1150,7 @@ describe('ProviderClient', () => {
     });
 
     it('keeps subscription + Codex on the Codex backend (subscription override wins)', async () => {
-      mockFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+      mockUndiciSuccess();
 
       const result = await client.forward({
         provider: 'openai',
@@ -1133,7 +1161,7 @@ describe('ProviderClient', () => {
         authType: 'subscription',
       });
 
-      const url = mockFetch.mock.calls[0][0] as string;
+      const { url, headers } = getUndiciRequest();
       // Must stay on chatgpt.com/backend-api (subscription), NOT swap to api.openai.com.
       expect(url).toBe('https://chatgpt.com/backend-api/codex/responses');
       expect(url).not.toContain('api.openai.com');
@@ -1141,7 +1169,6 @@ describe('ProviderClient', () => {
 
       // Subscription spoofs the Codex CLI user agent; the api_key responses
       // path does not. This confirms we hit the subscription endpoint.
-      const headers = mockFetch.mock.calls[0][1].headers;
       expect(headers['originator']).toBe('codex_cli_rs');
     });
 
@@ -1432,7 +1459,7 @@ describe('ProviderClient', () => {
     });
 
     it('does NOT map max_tokens to max_output_tokens for ChatGPT subscription', async () => {
-      mockFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+      mockUndiciSuccess();
 
       await client.forward({
         provider: 'openai',
@@ -1443,7 +1470,7 @@ describe('ProviderClient', () => {
         authType: 'subscription',
       });
 
-      const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const { body: sentBody } = getUndiciRequest();
       // ChatGPT subscription backend rejects max_output_tokens with
       // `unsupported_parameter`; never forward it on this path.
       expect(sentBody.max_output_tokens).toBeUndefined();
