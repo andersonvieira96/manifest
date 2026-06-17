@@ -7,7 +7,9 @@ export interface MomentumInput {
 const TIER_SCORES: Record<Tier, number> = {
   simple: -0.2,
   standard: 0.0,
-  complex: 0.2,
+  // Complex history should provide context continuity, but it should not
+  // promote a neutral follow-up above the standard/complex boundary by itself.
+  complex: 0.08,
   reasoning: 0.4,
 };
 

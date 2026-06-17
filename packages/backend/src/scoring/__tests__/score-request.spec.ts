@@ -103,10 +103,11 @@ describe('scoreRequest — hard overrides', () => {
     expect(result.reason).not.toBe('short_message');
   });
 
-  it('does NOT return SIMPLE for short message with momentum (no simple indicator)', () => {
+  it('keeps short neutral follow-ups standard under complex momentum', () => {
     const result = scoreRequest({ messages: [{ role: 'user', content: 'continue' }] }, undefined, {
       recentTiers: ['complex', 'complex', 'complex'],
     });
+    expect(result.tier).toBe('standard');
     expect(result.reason).not.toBe('short_message');
   });
 
